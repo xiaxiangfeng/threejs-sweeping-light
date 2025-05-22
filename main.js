@@ -31,9 +31,15 @@ function init() {
     1,
     10000
   );
-  camera.position.z = 142.98885903220912;
-  camera.position.x = -78.49353113009352;
-  camera.position.y = 52.49565936245603;
+
+  const pos = {
+    x: 726.5122207535669,
+    y: 551.71838527523,
+    z: 216.50118214403489,
+  };
+  camera.position.z = pos.z;
+  camera.position.y = pos.y;
+  camera.position.x = pos.x;
 
   window._camera = camera;
 
@@ -64,14 +70,22 @@ function init() {
 
   var options = {
     center: new THREE.Vector3(0, 0, 0),
-    innerRadius: 1000,
-    outerRadius: 2000,
+    innerRadius: 0,
+    outerRadius: 20,
     fillColor: new THREE.Color(1, 1, 0),
   };
   circleSweepPass = new CircleSweepPass(scene, camera, options);
   composer.addPass(circleSweepPass);
 
   controls = new OrbitControls(camera, renderer.domElement);
+
+  const target = {
+    x: 28.863136189017375,
+    y: -94.07561243936142,
+    z: 134.11084727147366,
+  };
+  window._controls = controls;
+  controls.target.set(target.x, target.y, target.z);
   controls.update();
   controls.enablePan = true;
   controls.enableDamping = true;
@@ -85,21 +99,7 @@ function init() {
   scene.add(axesHelper);
 
   let centerPos;
-  let scale = 10000;
-
-  function generateRandomNumber() {
-    let random = Math.random();
-    if (random < 0.5) {
-      // 50% chance to be between 0.2 and 0.3
-      return 0.2 + random * 0.1;
-    } else if (random < 0.8) {
-      // 30% chance to be between 0.3 and 0.5
-      return 0.3 + random * 0.2;
-    } else {
-      // Remaining 20% chance to be between 0.1 and 0.2
-      return 0.1 + random * 0.1;
-    }
-  }
+  let scale = 500000;
 
   data.features.forEach((d) => {
     // 忽略面积小的建筑
@@ -107,8 +107,22 @@ function init() {
       return;
     }
     if (!centerPos) {
-      let center = d.geometry.coordinates[0][0];
-      centerPos = d3geo.geoMercator().scale(scale)([center[0], center[1]]);
+      // 计算所有建筑的所有点的经纬度平均值作为中心
+      let allLng = [],
+        allLat = [];
+      data.features.forEach((f) => {
+        if (f.properties.area < 1000) return;
+        let coords = f.geometry.coordinates;
+        coords.forEach((ring) => {
+          ring.forEach((pt) => {
+            allLng.push(pt[0]);
+            allLat.push(pt[1]);
+          });
+        });
+      });
+      let avgLng = allLng.reduce((a, b) => a + b, 0) / allLng.length;
+      let avgLat = allLat.reduce((a, b) => a + b, 0) / allLat.length;
+      centerPos = d3geo.geoMercator().scale(scale)([avgLng, avgLat]);
     }
 
     let coords = d.geometry.coordinates;
@@ -120,18 +134,32 @@ function init() {
         shape.holes.push(new THREE.Path(buildPoints(coords[i], coords[0])));
       }
     }
+
+    // 分布式高度策略 - 平衡版本（真实感 + 可见度）
+    let rand = Math.random();
+    let height;
+
+    if (rand < 0.02) {
+      // 2% 极高摩天大楼 - 明亮的地标建筑
+      height = 4 + Math.random() * 6;
+    } else if (rand < 0.12) {
+      // 10% 高层楼 - 中等亮度
+      height = 2 + Math.random() * 2; /* 2~4 */
+    } else {
+      // 其余为普通楼 - 适中亮度，有些窗户灯光
+      height = 0.2 + Math.random() * 0.8; /* 0.2~1 */
+    }
+
     const geometry = new THREE.ExtrudeGeometry(shape, {
-      depth: generateRandomNumber(),
+      depth: height * 10,
       bevelEnabled: false,
     });
 
     const mesh = new THREE.Mesh(
       geometry,
-      new THREE.MeshPhongMaterial({ color: "#00BCD4" })
+      new THREE.MeshPhongMaterial()
     );
     mesh.rotateX(-Math.PI / 2);
-    mesh.scale.setScalar(50);
-    mesh.scale.setZ(20);
     scene.add(mesh);
   });
 
@@ -165,14 +193,16 @@ function render() {
     camera.aspect = canvas.clientWidth / canvas.clientHeight;
     camera.updateProjectionMatrix();
   }
-  const T = clock.getDelta();
 
-  circleSweepPass.depthMaterial.uniforms.innerRadius.value += 20 * T;
-  circleSweepPass.depthMaterial.uniforms.outerRadius.value += 20 * T;
-  if (circleSweepPass.depthMaterial.uniforms.innerRadius.value > 100) {
-    circleSweepPass.depthMaterial.uniforms.innerRadius.value = 0;
-    circleSweepPass.depthMaterial.uniforms.outerRadius.value = 1;
-  }
+  // 用时间周期控制sweep动画
+  const period = 2.0; // sweep一圈的秒数
+  const maxRadius = 500;
+  const minRadius = 0;
+  const now = clock.getElapsedTime();
+  const t = (now % period) / period; // 0~1
+  const sweepWidth = 20; // 圆环宽度
+  circleSweepPass.depthMaterial.uniforms.innerRadius.value = minRadius + t * (maxRadius - sweepWidth);
+  circleSweepPass.depthMaterial.uniforms.outerRadius.value = circleSweepPass.depthMaterial.uniforms.innerRadius.value + sweepWidth;
 
   controls.update();
 
